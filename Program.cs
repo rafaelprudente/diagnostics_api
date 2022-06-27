@@ -1,14 +1,20 @@
 using doctors_api.Model;
 using doctors_api.Records;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using System.IO.Compression;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var connectionString = builder.Configuration.GetConnectionString("SqliteConnectionString") ?? "Data Source=doctors_api.db";
+var connectionString = builder.Configuration.GetConnectionString("SqliteConnectionString") ?? "DataSource=:memory:";
+var keepAliveConnection = new SqliteConnection(connectionString);
+keepAliveConnection.Open();
 
-builder.Services.AddSqlite<ApiDbContext>(connectionString);
+builder.Services.AddDbContext<ApiDbContext>(options =>
+{
+    options.UseSqlite(keepAliveConnection);
+});
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
@@ -37,27 +43,11 @@ app.MapGet("/doctors/update_database", async (ApiDbContext db, [FromHeader(Name 
         if (!"7A5B0351-761D-46D6-99E3-8D549A1927DB".Equals(authorizationHeader))
             return Results.Unauthorized();
 
-        var tempFolder = new FileInfo(Path.GetTempFileName()).Directory;
+        DatabaseUpdateStatistics databaseUpdateStatistics = new DatabaseUpdateStatistics(0, 0);
 
-        var medicosZip = Path.GetTempFileName();
-        var medicosZipFolder = "";
-        if (tempFolder != null && tempFolder.Exists)
-            medicosZipFolder = Path.Combine(tempFolder.FullName, "MEDICOS_ZIP");
+        databaseUpdateStatistics = await UpdateDatabase(db);
 
-        if (new DirectoryInfo(medicosZipFolder).Exists) Directory.Delete(medicosZipFolder, true);
-
-#pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
-#pragma warning disable CS8604 // Possible null reference argument.
-        var content = GetUrlContent("http://www.cremesp.org.br/servicos/Downloads/MEDICOS.ZIP");
-        if (content != null)
-        {
-            File.WriteAllBytes($"{medicosZip}", bytes: content.Result);
-            ZipFile.ExtractToDirectory(medicosZip, medicosZipFolder);
-        }
-#pragma warning restore CS8600 // Converting null literal or possible null value to non-nullable type.
-#pragma warning restore CS8604 // Possible null reference argument.
-
-        return Results.Ok(db.BulkInsert(Path.Combine(medicosZipFolder, "FISICA.TXT")));
+        return Results.Ok(databaseUpdateStatistics);
     }
     catch (Exception ex)
     {
@@ -65,6 +55,22 @@ app.MapGet("/doctors/update_database", async (ApiDbContext db, [FromHeader(Name 
     }
 })
 .WithName("GetDoctorsUpdateDatabase");
+
+app.MapGet("/doctors/update_database_statistics", (ApiDbContext db, [FromHeader(Name = "X-AUTHORIZATION-HEADER")] string authorizationHeader) =>
+{
+    try
+    {
+        if (!"7A5B0351-761D-46D6-99E3-8D549A1927DB".Equals(authorizationHeader))
+            return Results.Unauthorized();
+
+        return Results.Ok(new DatabaseUpdateStatistics(db.Doctors.Count(), 0));
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(ex.ToString());
+    }
+})
+.WithName("GetDoctorsUpdateDatabaseStatistics");
 
 app.MapGet("/doctors", (ApiDbContext db, [FromHeader(Name = "X-AUTHORIZATION-HEADER")] string authorizationHeader, string? partName, string? city, int? page,
   int? pageSize) =>
@@ -121,17 +127,34 @@ app.MapGet("/doctors", (ApiDbContext db, [FromHeader(Name = "X-AUTHORIZATION-HEA
 
 app.Run();
 
-static async Task<byte[]?> GetUrlContent(string url)
-{
-    using var client = new HttpClient();
-    using var result = await client.GetAsync(url);
-    return result.IsSuccessStatusCode ? await result.Content.ReadAsByteArrayAsync() : null;
-}
-
 async Task EnsureDBExiste(IServiceProvider services, ILogger logger)
 {
-    logger.LogInformation("Garantindo que o banco de dados exista e esteja na string de conex�o : '{connectionString}'", connectionString);
-    using var db = services.CreateScope().ServiceProvider.GetRequiredService<ApiDbContext>();
-    await db.Database.EnsureCreatedAsync();
-    await db.Database.MigrateAsync();
+    try
+    {
+        logger.LogInformation("Garantindo que o banco de dados exista e esteja na string de conex�o : '{connectionString}'", connectionString);
+        using var db = services.CreateScope().ServiceProvider.GetRequiredService<ApiDbContext>();
+        await db.Database.EnsureCreatedAsync();
+        await db.Database.MigrateAsync();
+    }
+    catch (Exception ex)
+    {
+        logger.LogError("Error creating database.", ex);
+    }
+}
+
+async Task<DatabaseUpdateStatistics> UpdateDatabase(ApiDbContext db)
+{
+    DatabaseUpdateStatistics databaseUpdateStatistics = new DatabaseUpdateStatistics(0, 0);
+
+    using (HttpClient client = new())
+    {
+        using HttpResponseMessage response = await client.GetAsync("http://www.cremesp.org.br/servicos/Downloads/MEDICOS.ZIP", HttpCompletionOption.ResponseHeadersRead);
+        using Stream streamToReadFrom = await response.Content.ReadAsStreamAsync();
+        ZipArchive archive = new(streamToReadFrom);
+        ZipArchiveEntry entry = archive.Entries[0];
+        using StreamReader sr = new(entry.Open());
+        databaseUpdateStatistics = db.BulkInsert(sr);
+    }
+
+    return databaseUpdateStatistics;
 }
