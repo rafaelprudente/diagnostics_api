@@ -1,5 +1,6 @@
 using doctors_api.Model;
 using doctors_api.Records;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.IO.Compression;
 
@@ -29,72 +30,92 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-app.MapGet("/doctors/update_database", (ApiDbContext db) =>
+app.MapGet("/doctors/update_database", async (ApiDbContext db, [FromHeader(Name = "X-AUTHORIZATION-HEADER")] string authorizationHeader) =>
 {
-    var tempFolder = new FileInfo(Path.GetTempFileName()).Directory;
+    try
+    {
+        if (!"7A5B0351-761D-46D6-99E3-8D549A1927DB".Equals(authorizationHeader))
+            return Results.Unauthorized();
 
-    var medicosZip = Path.GetTempFileName();
-    var medicosZipFolder = "";
-    if (tempFolder != null && tempFolder.Exists)
-        medicosZipFolder = Path.Combine(tempFolder.FullName, "MEDICOS_ZIP");
+        var tempFolder = new FileInfo(Path.GetTempFileName()).Directory;
 
-    if (new DirectoryInfo(medicosZipFolder).Exists) Directory.Delete(medicosZipFolder, true);
+        var medicosZip = Path.GetTempFileName();
+        var medicosZipFolder = "";
+        if (tempFolder != null && tempFolder.Exists)
+            medicosZipFolder = Path.Combine(tempFolder.FullName, "MEDICOS_ZIP");
+
+        if (new DirectoryInfo(medicosZipFolder).Exists) Directory.Delete(medicosZipFolder, true);
 
 #pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
 #pragma warning disable CS8604 // Possible null reference argument.
-    var content = GetUrlContent("http://www.cremesp.org.br/servicos/Downloads/MEDICOS.ZIP");
-    if (content != null)
-    {
-        File.WriteAllBytes($"{medicosZip}", bytes: content.Result);
-        ZipFile.ExtractToDirectory(medicosZip, medicosZipFolder);
-    }
+        var content = GetUrlContent("http://www.cremesp.org.br/servicos/Downloads/MEDICOS.ZIP");
+        if (content != null)
+        {
+            File.WriteAllBytes($"{medicosZip}", bytes: content.Result);
+            ZipFile.ExtractToDirectory(medicosZip, medicosZipFolder);
+        }
 #pragma warning restore CS8600 // Converting null literal or possible null value to non-nullable type.
 #pragma warning restore CS8604 // Possible null reference argument.
 
-    return db.BulkInsert(Path.Combine(medicosZipFolder, "FISICA.TXT"));
+        return Results.Ok(db.BulkInsert(Path.Combine(medicosZipFolder, "FISICA.TXT")));
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(ex.ToString());
+    }
 })
 .WithName("GetDoctorsUpdateDatabase");
 
-app.MapGet("/doctors", (ApiDbContext db, string? partName, string? city, int? page,
+app.MapGet("/doctors", (ApiDbContext db, [FromHeader(Name = "X-AUTHORIZATION-HEADER")] string authorizationHeader, string? partName, string? city, int? page,
   int? pageSize) =>
 {
-    PageResult<doctors_api.Model.Doctor> returnValue = new PageResult<doctors_api.Model.Doctor>();
-
-    int pageNumber = page ?? 1;
-    int pagerTake = pageSize ?? 50;
-
-    if (partName == null && city == null)
+    try
     {
-        returnValue = db.Doctors.OrderBy(d => d.Name).GetPaged(pageNumber, pagerTake);
-    }
+        if (!"7A5B0351-761D-46D6-99E3-8D549A1927DB".Equals(authorizationHeader))
+            return Results.Unauthorized();
 
-    if (partName != null && city == null)
+        PageResult<doctors_api.Model.Doctor> returnValue = new PageResult<doctors_api.Model.Doctor>();
+
+        int pageNumber = page ?? 1;
+        int pagerTake = pageSize ?? 50;
+
+        if (partName == null && city == null)
+        {
+            returnValue = db.Doctors.OrderBy(d => d.Name).GetPaged(pageNumber, pagerTake);
+        }
+
+        if (partName != null && city == null)
+        {
+            returnValue = db.Doctors.Where(d => d.Name != null &&
+                                                d.Name.StartsWith(partName.ToUpperInvariant()))
+                                                      .OrderBy(d => d.Name)
+                                                      .GetPaged(pageNumber, pagerTake);
+        }
+
+        if (partName == null && city != null)
+        {
+            returnValue = db.Doctors.Where(d => d.City != null &&
+                                                d.City.Equals(city.ToUpperInvariant()))
+                                                      .OrderBy(d => d.Name)
+                                                      .GetPaged(pageNumber, pagerTake);
+        }
+
+        if (partName != null && city != null)
+        {
+            returnValue = db.Doctors.Where(d => d.Name != null &&
+                                                d.Name.StartsWith(partName.ToUpperInvariant()) &&
+                                                d.City != null &&
+                                                d.City.Equals(city.ToUpperInvariant()))
+                                                      .OrderBy(d => d.Name)
+                                                      .GetPaged(pageNumber, pagerTake);
+        }
+
+        return Results.Ok(returnValue);
+    }
+    catch (Exception ex)
     {
-        returnValue = db.Doctors.Where(d => d.Name != null && 
-                                            d.Name.StartsWith(partName.ToUpperInvariant()))
-                                                  .OrderBy(d => d.Name)
-                                                  .GetPaged(pageNumber, pagerTake);
+        return Results.Problem(ex.ToString());
     }
-
-    if (partName == null && city != null)
-    {
-        returnValue = db.Doctors.Where(d => d.City != null && 
-                                            d.City.Equals(city.ToUpperInvariant()))
-                                                  .OrderBy(d => d.Name)
-                                                  .GetPaged(pageNumber, pagerTake);
-    }
-
-    if (partName != null && city != null)
-    {
-        returnValue = db.Doctors.Where(d => d.Name != null && 
-                                            d.Name.StartsWith(partName.ToUpperInvariant()) &&
-                                            d.City != null &&
-                                            d.City.Equals(city.ToUpperInvariant()))
-                                                  .OrderBy(d => d.Name)
-                                                  .GetPaged(pageNumber, pagerTake);
-    }
-
-    return returnValue;
 })
 .WithName("GetDoctors");
 
@@ -109,7 +130,7 @@ static async Task<byte[]?> GetUrlContent(string url)
 
 async Task EnsureDBExiste(IServiceProvider services, ILogger logger)
 {
-    logger.LogInformation("Garantindo que o banco de dados exista e esteja na string de conexão : '{connectionString}'", connectionString);
+    logger.LogInformation("Garantindo que o banco de dados exista e esteja na string de conexï¿½o : '{connectionString}'", connectionString);
     using var db = services.CreateScope().ServiceProvider.GetRequiredService<ApiDbContext>();
     await db.Database.EnsureCreatedAsync();
     await db.Database.MigrateAsync();
