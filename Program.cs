@@ -70,17 +70,28 @@ app.MapGet("/doctors", (ApiDbContext db, string? partName, string? city, int? pa
 
     if (partName != null && city == null)
     {
-        returnValue = db.Doctors.Where(d => d.Name.StartsWith(partName.ToUpperInvariant())).OrderBy(d => d.Name).GetPaged(pageNumber, pagerTake);
+        returnValue = db.Doctors.Where(d => d.Name != null && 
+                                            d.Name.StartsWith(partName.ToUpperInvariant()))
+                                                  .OrderBy(d => d.Name)
+                                                  .GetPaged(pageNumber, pagerTake);
     }
 
     if (partName == null && city != null)
     {
-        returnValue = db.Doctors.Where(d => d.City.Equals(city.ToUpperInvariant())).OrderBy(d => d.Name).GetPaged(pageNumber, pagerTake);
+        returnValue = db.Doctors.Where(d => d.City != null && 
+                                            d.City.Equals(city.ToUpperInvariant()))
+                                                  .OrderBy(d => d.Name)
+                                                  .GetPaged(pageNumber, pagerTake);
     }
 
     if (partName != null && city != null)
     {
-        returnValue = db.Doctors.Where(d => d.Name.StartsWith(partName.ToUpperInvariant()) && d.City.Equals(city.ToUpperInvariant())).OrderBy(d => d.Name).GetPaged(pageNumber, pagerTake);
+        returnValue = db.Doctors.Where(d => d.Name != null && 
+                                            d.Name.StartsWith(partName.ToUpperInvariant()) &&
+                                            d.City != null &&
+                                            d.City.Equals(city.ToUpperInvariant()))
+                                                  .OrderBy(d => d.Name)
+                                                  .GetPaged(pageNumber, pagerTake);
     }
 
     return returnValue;
