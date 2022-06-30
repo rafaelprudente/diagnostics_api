@@ -1,6 +1,7 @@
 ﻿using doctors_api.Records;
 using Microsoft.EntityFrameworkCore;
 using System.Data.Common;
+using System.IO.Compression;
 
 namespace doctors_api.Model
 {
@@ -11,87 +12,6 @@ namespace doctors_api.Model
 
         public DbSet<Doctor> Doctors => Set<Doctor>();
 
-        public DatabaseUpdateStatistics BulkInsert(string fullFileName)
-        {
-            int numberLines = 0;
-
-            Database.OpenConnection();
-
-            var truncate = Database.GetDbConnection().CreateCommand();
-            truncate.CommandText = @"DELETE FROM doctors";
-            truncate.ExecuteNonQuery();
-            truncate.CommandText = @"DELETE FROM sqlite_sequence WHERE name='doctors'";
-            truncate.ExecuteNonQuery();
-
-            using (var transaction = Database.GetDbConnection().BeginTransaction())
-            {
-                var command = Database.GetDbConnection().CreateCommand();
-                command.CommandText = @"INSERT INTO doctors (Crm, Name, Status, Subscription, Inactivation, City, Uf, Specialties) VALUES ($crm, $name, $status, $subscription, $inactivation, $city, $uf, $specialties)";
-
-                var parameter1 = command.CreateParameter();
-                parameter1.ParameterName = "$crm";
-                var parameter2 = command.CreateParameter();
-                parameter2.ParameterName = "$name";
-                var parameter3 = command.CreateParameter();
-                parameter3.ParameterName = "$status";
-                var parameter4 = command.CreateParameter();
-                parameter4.ParameterName = "$subscription";
-                var parameter5 = command.CreateParameter();
-                parameter5.ParameterName = "$inactivation";
-                var parameter6 = command.CreateParameter();
-                parameter6.ParameterName = "$city";
-                var parameter7 = command.CreateParameter();
-                parameter7.ParameterName = "$uf";
-                var parameter8 = command.CreateParameter();
-                parameter8.ParameterName = "$specialties";
-
-                command.Parameters.Add(parameter1);
-                command.Parameters.Add(parameter2);
-                command.Parameters.Add(parameter3);
-                command.Parameters.Add(parameter4);
-                command.Parameters.Add(parameter5);
-                command.Parameters.Add(parameter6);
-                command.Parameters.Add(parameter7);
-                command.Parameters.Add(parameter8);
-
-
-                foreach (string line in System.IO.File.ReadLines(fullFileName))
-                {
-                    if (line.StartsWith("Codigo")) continue;
-
-                    parameter1.Value = line.Split('|')[0].Trim();
-                    parameter2.Value = line.Split('|')[1].Trim();
-                    parameter3.Value = line.Split('|')[2].Trim();
-                    if ("-  -".Equals(line.Split('|')[3].Trim()))
-                    {
-                        parameter4.Value = DBNull.Value;
-                    }
-                    else
-                    {
-                        parameter4.Value = line.Split('|')[3].Trim();
-                    }
-                    if ("-  -".Equals(line.Split('|')[4].Trim()))
-                    {
-                        parameter5.Value = DBNull.Value;
-                    }
-                    else
-                    {
-                        parameter5.Value = line.Split('|')[4].Trim();
-                    }
-                    parameter6.Value = line.Split('|')[5].Trim();
-                    parameter7.Value = line.Split('|')[6].Trim();
-                    parameter8.Value = line.Split('|')[7].Trim();
-
-                    command.ExecuteNonQuery();
-
-                    numberLines++;
-                }
-
-                transaction.Commit();
-            }
-
-            return new DatabaseUpdateStatistics(numberLines, 0);
-        }
         public DatabaseUpdateStatistics BulkInsert(StreamReader sr)
         {
             int numberLines = 0;
@@ -143,6 +63,39 @@ namespace doctors_api.Model
             return new DatabaseUpdateStatistics(numberLines, 0);
         }
 
+        public static async Task EnsureDBExiste(IServiceProvider services, ILogger logger, string connectionString)
+        {
+            logger.LogInformation("Garantindo que o banco de dados exista e esteja na string de conex�o : '{connectionString}'", connectionString);
+            using var db = services.CreateScope().ServiceProvider.GetRequiredService<ApiDbContext>();
+            await db.Database.EnsureCreatedAsync();
+
+            try
+            {
+                await db.Database.MigrateAsync();
+            }
+            catch (Exception ex)
+            {
+                logger.LogError("Error to exeute migrations.", ex);
+            }
+
+            if (!db.Doctors.Any()) _ = await UpdateDatabase(db);
+        }
+        public static async Task<DatabaseUpdateStatistics> UpdateDatabase(ApiDbContext db)
+        {
+            DatabaseUpdateStatistics databaseUpdateStatistics = new(0, 0);
+
+            using (HttpClient client = new())
+            {
+                using HttpResponseMessage response = await client.GetAsync("http://www.cremesp.org.br/servicos/Downloads/MEDICOS.ZIP", HttpCompletionOption.ResponseHeadersRead);
+                using Stream streamToReadFrom = await response.Content.ReadAsStreamAsync();
+                ZipArchive archive = new(streamToReadFrom);
+                ZipArchiveEntry entry = archive.Entries[0];
+                using StreamReader sr = new(entry.Open());
+                databaseUpdateStatistics = db.BulkInsert(sr);
+            }
+
+            return databaseUpdateStatistics;
+        }
         private static DbParameter CreateParameter(DbCommand command, string name)
         {
             var parameter = command.CreateParameter();
@@ -151,7 +104,6 @@ namespace doctors_api.Model
 
             return parameter;
         }
-
         private static object? ParameterValue(string line, int index)
         {
             object returnValue = DBNull.Value;

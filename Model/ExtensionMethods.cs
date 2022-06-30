@@ -4,10 +4,12 @@
     {
         public static PageResult<T> GetPaged<T>(this IQueryable<T> query, int page, int pageSize) where T : class
         {
-            var result = new PageResult<T>();
-            result.CurrentPage = page;
-            result.PageSize = pageSize;
-            result.RowCount = query.Count();
+            var result = new PageResult<T>
+            {
+                CurrentPage = page,
+                PageSize = pageSize,
+                RowCount = query.Count()
+            };
 
             var pageCount = (double)result.RowCount / pageSize;
             result.PageCount = (int)Math.Ceiling(pageCount);

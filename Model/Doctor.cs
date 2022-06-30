@@ -8,7 +8,7 @@ namespace doctors_api.Model
     {
         [Key]
         [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
-        public int Id { get; set; }
+        public int DoctorId { get; set; }
         public int? Crm { get; set; }
         public string? Name { get; set; }
         public string? Status { get; set; }
